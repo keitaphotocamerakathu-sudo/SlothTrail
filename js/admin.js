@@ -2,6 +2,7 @@
   const db = window.trailDb;
   const UI = window.TrailUI;
   const state = { user:null, isAdmin:false, events:[], eventId:null, checkpoints:[], teams:[], fields:[], realtime:null };
+  let checkpointMap=null, checkpointMarker=null;
   const $ = id => document.getElementById(id);
 
   async function boot(){
@@ -82,6 +83,9 @@
     $('fieldForm').addEventListener('submit',saveField);
     $('newCheckpointBtn').addEventListener('click',()=>openCheckpoint());
     $('checkpointForm').addEventListener('submit',saveCheckpoint);
+    $('checkpointGpsRequired').addEventListener('change',toggleCheckpointGps);
+    $('checkpointMyLocation').addEventListener('click',useCurrentCheckpointLocation);
+    $('checkpointClearLocation').addEventListener('click',clearCheckpointLocation);
     $('generateSlotsBtn').addEventListener('click',generateSlots);
     $('refreshScansBtn').addEventListener('click',loadScans);
     $('refreshQrsBtn').addEventListener('click',loadQrs);
@@ -125,14 +129,14 @@
 
   function openEvent(ev=null){
     $('eventModalTitle').textContent=ev?'แก้ไข Event':'สร้าง Event';
-    $('eventId').value=ev?.id||''; $('eventName').value=ev?.name||''; $('eventSlug').value=ev?.slug||''; $('eventStatus').value=ev?.status||'draft'; $('eventVenue').value=ev?.venue||''; $('eventDate').value=ev?.event_date||''; $('eventStart').value=ev?.race_start_time?.slice(0,5)||''; $('eventTeamSize').value=ev?.team_size||2; $('eventInterval').value=ev?.release_interval_minutes||5; $('eventMaxTeams').value=ev?.max_teams||''; $('eventFee').value=ev?.entry_fee||0; $('eventDescription').value=ev?.description||''; $('eventPublicReg').checked=!!ev?.public_registration_enabled; $('eventGps').checked=!!ev?.gps_validation_enabled;
+    $('eventId').value=ev?.id||''; $('eventName').value=ev?.name||''; $('eventSlug').value=ev?.slug||''; $('eventStatus').value=ev?.status||'draft'; $('eventVenue').value=ev?.venue||''; $('eventDate').value=ev?.event_date||''; $('eventStart').value=ev?.race_start_time?.slice(0,5)||''; $('eventTeamSize').value=ev?.team_size||2; $('eventInterval').value=ev?.release_interval_minutes||5; $('eventMaxTeams').value=ev?.max_teams||''; $('eventFee').value=ev?.entry_fee||0; $('eventDescription').value=ev?.description||''; $('eventPublicReg').checked=!!ev?.public_registration_enabled;
     $('eventModal').classList.add('show');
     if(!ev) setTimeout(()=>$('eventName').focus(),50);
   }
   async function saveEvent(e){
     e.preventDefault();
     const id=$('eventId').value;
-    const payload={name:$('eventName').value.trim(),slug:$('eventSlug').value.trim()||UI.slugify($('eventName').value),status:$('eventStatus').value,venue:$('eventVenue').value.trim()||null,event_date:$('eventDate').value||null,race_start_time:$('eventStart').value||null,team_size:Number($('eventTeamSize').value)||2,release_interval_minutes:Number($('eventInterval').value)||5,max_teams:$('eventMaxTeams').value?Number($('eventMaxTeams').value):null,entry_fee:Number($('eventFee').value)||0,description:$('eventDescription').value.trim()||null,public_registration_enabled:$('eventPublicReg').checked,gps_validation_enabled:$('eventGps').checked};
+    const payload={name:$('eventName').value.trim(),slug:$('eventSlug').value.trim()||UI.slugify($('eventName').value),status:$('eventStatus').value,venue:$('eventVenue').value.trim()||null,event_date:$('eventDate').value||null,race_start_time:$('eventStart').value||null,team_size:Number($('eventTeamSize').value)||2,release_interval_minutes:Number($('eventInterval').value)||5,max_teams:$('eventMaxTeams').value?Number($('eventMaxTeams').value):null,entry_fee:Number($('eventFee').value)||0,description:$('eventDescription').value.trim()||null,public_registration_enabled:$('eventPublicReg').checked};
     let res;
     if(id){
       res=await db.from('trail_events').update(payload).eq('id',id).select().single();
@@ -234,9 +238,51 @@
     const ev=currentEvent(); $('dashboardHint').textContent=ev?`${ev.name} · ${ev.release_interval_minutes} นาที/ทีม · ${ev.team_size} คน/ทีม`:'สร้าง Event ก่อน';
   }
 
+  function toggleCheckpointGps(){
+    const required=$('checkpointGpsRequired').checked;
+    $('checkpointRadiusField').style.display=required?'block':'none';
+  }
+  function updateCoordinateText(){
+    const lat=$('checkpointLat').value, lng=$('checkpointLng').value;
+    $('checkpointCoordinateText').textContent=(lat&&lng)?`📍 พิกัด RC: ${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}`:'ยังไม่ได้ปักตำแหน่ง';
+  }
+  function setCheckpointLocation(lat,lng,{center=true}={}){
+    lat=Number(lat);lng=Number(lng);
+    if(!Number.isFinite(lat)||!Number.isFinite(lng)||lat<-90||lat>90||lng<-180||lng>180)return;
+    $('checkpointLat').value=lat.toFixed(7);$('checkpointLng').value=lng.toFixed(7);updateCoordinateText();
+    if(!checkpointMap)return;
+    if(!checkpointMarker){
+      checkpointMarker=L.marker([lat,lng],{draggable:true}).addTo(checkpointMap);
+      checkpointMarker.on('dragend',()=>{const p=checkpointMarker.getLatLng();setCheckpointLocation(p.lat,p.lng,{center:false})});
+    }else checkpointMarker.setLatLng([lat,lng]);
+    if(center)checkpointMap.setView([lat,lng],Math.max(checkpointMap.getZoom(),16));
+  }
+  function clearCheckpointLocation(){
+    $('checkpointLat').value='';$('checkpointLng').value='';
+    if(checkpointMarker&&checkpointMap){checkpointMap.removeLayer(checkpointMarker);checkpointMarker=null;}
+    updateCoordinateText();
+  }
+  function initCheckpointMap(){
+    if(!window.L){UI.toast('โหลดแผนที่ไม่สำเร็จ กรุณาตรวจอินเทอร์เน็ต','error');return;}
+    if(!checkpointMap){
+      checkpointMap=L.map('checkpointMap',{zoomControl:true}).setView([13.0,101.0],6);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(checkpointMap);
+      checkpointMap.on('click',e=>setCheckpointLocation(e.latlng.lat,e.latlng.lng));
+    }
+    setTimeout(()=>checkpointMap.invalidateSize(),80);
+  }
+  function useCurrentCheckpointLocation(){
+    if(!navigator.geolocation){UI.toast('อุปกรณ์นี้ไม่รองรับตำแหน่ง GPS','error');return;}
+    $('checkpointMyLocation').disabled=true;
+    navigator.geolocation.getCurrentPosition(p=>{
+      $('checkpointMyLocation').disabled=false;
+      setCheckpointLocation(p.coords.latitude,p.coords.longitude);
+    },err=>{
+      $('checkpointMyLocation').disabled=false;
+      UI.toast('อ่านตำแหน่งปัจจุบันไม่ได้ กรุณาอนุญาต Location หรือแตะบนแผนที่เอง','error');
+    },{enableHighAccuracy:true,timeout:10000,maximumAge:5000});
+  }
   function openCheckpoint(cp=null){
-    if(!state.eventId){UI.toast('กรุณาสร้าง/เลือก Event ก่อน','error');return;}
-    const gpsEnabled=!!currentEvent()?.gps_validation_enabled;
     $('checkpointModalTitle').textContent=cp?'แก้ไข RC':'เพิ่ม RC';
     $('checkpointId').value=cp?.id||'';
     $('checkpointNo').value=cp?.checkpoint_no||state.checkpoints.length+1;
@@ -244,16 +290,26 @@
     $('checkpointClue').value=cp?.clue||'';
     $('checkpointDistanceText').value=cp?.distance_text||'';
     $('checkpointPoints').value=cp?.points??50;
-    $('checkpointLat').value=gpsEnabled?(cp?.latitude??''):'';
-    $('checkpointLng').value=gpsEnabled?(cp?.longitude??''):'';
-    $('checkpointGpsFields').style.display=gpsEnabled?'block':'none';
+    $('checkpointLat').value=cp?.latitude??'';
+    $('checkpointLng').value=cp?.longitude??'';
+    $('checkpointGpsRequired').checked=!!cp?.gps_required;
+    $('checkpointGpsRadius').value=cp?.gps_radius_meters??100;
     $('checkpointFinish').checked=!!cp?.is_finish;
+    toggleCheckpointGps();updateCoordinateText();
     $('checkpointModal').classList.add('show');
+    initCheckpointMap();
+    setTimeout(()=>{
+      if(cp?.latitude!=null&&cp?.longitude!=null)setCheckpointLocation(cp.latitude,cp.longitude);
+      else if(checkpointMarker){checkpointMap.removeLayer(checkpointMarker);checkpointMarker=null;}
+    },120);
   }
   async function saveCheckpoint(e){
     e.preventDefault(); const id=$('checkpointId').value;
-    const gpsEnabled=!!currentEvent()?.gps_validation_enabled;
-    const payload={event_id:state.eventId,checkpoint_no:Number($('checkpointNo').value),name:$('checkpointName').value.trim(),clue:$('checkpointClue').value.trim()||null,distance_text:$('checkpointDistanceText').value.trim()||null,points:Number($('checkpointPoints').value)||0,latitude:gpsEnabled&&$('checkpointLat').value?Number($('checkpointLat').value):null,longitude:gpsEnabled&&$('checkpointLng').value?Number($('checkpointLng').value):null,is_finish:$('checkpointFinish').checked,sort_order:Number($('checkpointNo').value)};
+    const gpsRequired=$('checkpointGpsRequired').checked;
+    const lat=$('checkpointLat').value?Number($('checkpointLat').value):null;
+    const lng=$('checkpointLng').value?Number($('checkpointLng').value):null;
+    if(gpsRequired&&(lat==null||lng==null)){UI.toast('RC จุดนี้เปิดตรวจ GPS กรุณาปักตำแหน่งบนแผนที่ก่อนบันทึก','error');return;}
+    const payload={event_id:state.eventId,checkpoint_no:Number($('checkpointNo').value),name:$('checkpointName').value.trim(),clue:$('checkpointClue').value.trim()||null,distance_text:$('checkpointDistanceText').value.trim()||null,points:Number($('checkpointPoints').value)||0,latitude:lat,longitude:lng,gps_required:gpsRequired,gps_radius_meters:Math.min(5000,Math.max(10,Number($('checkpointGpsRadius').value)||100)),is_finish:$('checkpointFinish').checked,sort_order:Number($('checkpointNo').value)};
     const res=id?await db.from('trail_checkpoints').update(payload).eq('id',id):await db.from('trail_checkpoints').insert(payload);
     if(res.error){UI.toast(res.error.message,'error');return;} $('checkpointModal').classList.remove('show');UI.toast('บันทึก RC แล้ว','success');await loadCheckpoints();await loadDashboard();
   }
@@ -265,7 +321,7 @@
     ]);
     if(error){renderDbError('checkpointsTable',error);return;}state.checkpoints=data||[];const qrs=qrRows||[];
     if(!state.checkpoints.length){$('checkpointsTable').innerHTML='<div class="empty panel">ยังไม่มี RC — เพิ่ม RC จุดแรกได้เลย</div>';return;}
-    $('checkpointsTable').innerHTML=`<div class="table-wrap"><table class="table"><thead><tr><th>RC</th><th>คำใบ้/ระยะ</th><th>คะแนน</th><th>QR</th><th>จัดการ</th></tr></thead><tbody>${state.checkpoints.map(cp=>{const real=qrs.filter(q=>q.checkpoint_id===cp.id&&q.qr_type==='real').length,decoy=qrs.filter(q=>q.checkpoint_id===cp.id&&q.qr_type==='decoy').length;return `<tr><td><strong>RC ${cp.checkpoint_no} · ${UI.esc(cp.name)}</strong>${cp.is_finish?'<div class="badge badge-green">FINISH</div>':''}</td><td><div>${UI.esc(cp.clue||'-')}</div><div class="help">${UI.esc(cp.distance_text||'ไม่ระบุระยะ')}</div></td><td>${cp.points}</td><td>จริง ${real} · หลอก ${decoy}</td><td><div class="row-actions"><button class="btn mini" data-edit-cp="${cp.id}">แก้ไข</button><button class="btn mini" data-real-qr="${cp.id}">+ QR จริง</button><button class="btn mini" data-decoy-qr="${cp.id}">+ QR หลอก</button><button class="btn btn-danger mini" data-del-cp="${cp.id}">ลบ</button></div></td></tr>`}).join('')}</tbody></table></div>`;
+    $('checkpointsTable').innerHTML=`<div class="table-wrap"><table class="table"><thead><tr><th>RC</th><th>คำใบ้/ระยะ</th><th>ตำแหน่ง</th><th>คะแนน</th><th>QR</th><th>จัดการ</th></tr></thead><tbody>${state.checkpoints.map(cp=>{const real=qrs.filter(q=>q.checkpoint_id===cp.id&&q.qr_type==='real').length,decoy=qrs.filter(q=>q.checkpoint_id===cp.id&&q.qr_type==='decoy').length;return `<tr><td><strong>RC ${cp.checkpoint_no} · ${UI.esc(cp.name)}</strong>${cp.is_finish?'<div class="badge badge-green">FINISH</div>':''}</td><td><div>${UI.esc(cp.clue||'-')}</div><div class="help">${UI.esc(cp.distance_text||'ไม่ระบุระยะ')}</div></td><td>${cp.latitude!=null&&cp.longitude!=null?`<span class="badge badge-green">📍 ปักแล้ว</span>${cp.gps_required?`<div class="help">ตรวจ GPS ${cp.gps_radius_meters||100} ม.</div>`:'<div class="help">ไม่ตรวจ GPS</div>'} `:'<span class="badge badge-gray">ยังไม่ปัก</span>'}</td><td>${cp.points}</td><td>จริง ${real} · หลอก ${decoy}</td><td><div class="row-actions"><button class="btn mini" data-edit-cp="${cp.id}">แก้ไข</button><button class="btn mini" data-real-qr="${cp.id}">+ QR จริง</button><button class="btn mini" data-decoy-qr="${cp.id}">+ QR หลอก</button><button class="btn btn-danger mini" data-del-cp="${cp.id}">ลบ</button></div></td></tr>`}).join('')}</tbody></table></div>`;
     document.querySelectorAll('[data-edit-cp]').forEach(b=>b.addEventListener('click',()=>openCheckpoint(state.checkpoints.find(x=>x.id===b.dataset.editCp))));
     document.querySelectorAll('[data-real-qr]').forEach(b=>b.addEventListener('click',()=>createQr(b.dataset.realQr,'real')));
     document.querySelectorAll('[data-decoy-qr]').forEach(b=>b.addEventListener('click',()=>createQr(b.dataset.decoyQr,'decoy')));
