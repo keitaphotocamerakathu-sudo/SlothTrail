@@ -1,7 +1,0 @@
-window.TRAIL_CONFIG = {
-  SUPABASE_URL: 'https://ntwzjavdyqqhrhptnudf.supabase.co',
-  SUPABASE_PUBLISHABLE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im50d3pqYXZkeXFxaHJocHRudWRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg4NTA3NzksImV4cCI6MjEwNDQyNjc3OX0.ZRQT0tFgxaJoqBXjXW2Buit2PppjpJMJFT-r4PGAuAg',
-  APP_NAME: 'Trail RC Challenge',
-  LINE_MINI_APP_LIFF_ID: '2011506339-Gh6eOhW1',
-  LINE_MINI_APP_PERMANENT_LINK: 'https://miniapp.line.me/2011506339-Gh6eOhW1'
-};
